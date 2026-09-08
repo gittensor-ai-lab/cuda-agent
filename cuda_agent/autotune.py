@@ -16,6 +16,8 @@ knobs is thousands of builds and the round is three hours long.
 
 from __future__ import annotations
 
+import time
+
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -226,11 +228,13 @@ class Autotuner:
     def _try(self, knob: Knob, value: int, baseline: dict[str, float]) -> tuple[bool, dict[str, float]]:
         cand = self.frontier.checkout()
         idx = self.ledger.next_idx()
+        started = time.monotonic()
         try:
             try:
                 apply_all(cand.path, [knob.edit(value)], allowed=self.allowed, denied=self.denied)
             except Exception as exc:
-                self.ledger.record(Attempt(idx, knob.key, FAMILY, "malformed", detail=str(exc)))
+                self.ledger.record(Attempt(idx, knob.key, FAMILY, "malformed", detail=str(exc),
+                                           elapsed_s=time.monotonic() - started))
                 return False, baseline
 
             ev = evaluate(self.harness, cand.path, baseline, quick=self.quick)
@@ -240,6 +244,10 @@ class Autotuner:
                 idx, knob.key, FAMILY, ev.verdict,
                 detail=f"{knob.name or knob.kind} {knob.value} -> {value}: {ev.detail}",
                 paths=[knob.path], speedup=ev.speedup,
+                # Recorded because the published round report is part of how a
+                # maintainer-run evaluation stays checkable: a sweep candidate
+                # that shows 0s hides most of the round's real GPU cost.
+                elapsed_s=time.monotonic() - started,
             ))
             if ev.verdict == ACCEPTED:
                 self.frontier.promote(

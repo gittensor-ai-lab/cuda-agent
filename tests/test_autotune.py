@@ -171,3 +171,13 @@ def test_geometry_bounds_survive_the_capacity_filter(tmp_path):
     (tmp_path / "kernels" / "k.cu").write_text("constexpr int ARGMAX_ROWS_MAX = 16;\n")
     knobs = discover_knobs(tmp_path, "kernels/k.cu")
     assert [k.name for k in knobs] == ["ARGMAX_ROWS_MAX"]
+
+
+def test_sweep_attempts_record_their_cost(repo, tmp_path):
+    """The published round report is part of how a maintainer-run evaluation
+    stays checkable; a sweep candidate showing 0s hides most of the GPU cost."""
+    tuner, _, ledger = _tuner(repo, tmp_path)
+    tuner.run(["kernels/k.cu"], {"4k": 100.0}, max_evals=2)
+    assert ledger.attempts
+    assert all(a.elapsed_s >= 0 for a in ledger.attempts)
+    assert any(hasattr(a, "elapsed_s") for a in ledger.attempts)
