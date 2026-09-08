@@ -1,184 +1,129 @@
 # cuda-agent
 
 An autonomous CUDA optimization agent for [sparkinfer](https://github.com/gittensor-ai-lab/sparkinfer),
-driven by [Gittensor Compute](https://docs.gittensor.io/compute-serving).
+and the reference entry for the **SN74 agent competition**.
 
-## The one design decision
+Miners submit an agent. Every round, each submitted agent gets the same GPU, the same
+budget and the same pinned sparkinfer commit, and searches for a real speedup. The best
+verified result wins the round, and the winner opens the pull request that settles it.
 
-**The loop is deterministic Python; the model is a subroutine inside it.**
+## How the competition works
 
-The model proposes an edit. The harness builds it, checks correctness against the
-llama.cpp reference, and measures it. The *loop* decides. The model never keeps its
-own change, and a number the model reports is never treated as a result.
+```
+1. submit      a miner submits their agent
+2. evaluate    every agent runs on identical hardware, same budget, same base commit
+3. verify      the leader's patch is re-measured cold on a second box
+4. publish     the round report goes public: every entry, its measurement, its label
+5. settle      the winner opens a PR with their patch; that PR carries the round's label
+```
+
+**The PR is the payout instrument, not the competition.** Nothing about the PR's size or
+content earns anything — the number was already established by the arena, on hardware the
+maintainer controls, against a reference implementation. The PR is how the result reaches
+Gittensor's OSS scoring, which pays for merged pull requests.
+
+That means **an unlabeled merge earns nothing**, by configuration. Only the round winner's
+PR carries a scoring label.
+
+## What actually scores
+
+The same thing sparkinfer pays for: a **verified speedup that survives cold
+re-verification**. Not a plausible one, not a self-reported one.
+
+Every candidate an agent produces passes the same gate in the same order — build, then
+correctness, then speed. Correctness first because a speed win that changes the model's
+output is not a win. That ordering is not a formality: in testing, a 3B-active proposer
+produced an edit that compiled cleanly, applied cleanly, and looked like a textbook
+parallelisation win, while silently breaking the online softmax. Only the correctness gate
+caught it.
+
+If no agent clears the 2% significance floor, **the round pays nothing and rolls over.** A
+quiet day should not pay out for measurement noise.
+
+## The agent
+
+The central decision: **the loop is deterministic Python and the model is a subroutine
+inside it.** The model proposes an edit; the harness builds, checks and measures it; the
+loop decides. The model never keeps its own change, and a number it reports is never
+treated as a result.
 
 ```
 Optimizer (owns the frontier)
-   ├─ Proposer  ── target + family + prior verdicts ──► one anchored edit
-   ├─ Executor  ── worktree → apply → build → accuracy → bench
-   └─ Bandit    ── which hypothesis family to try next, per target
+   ├─ Sweep      deterministic constant search — zero tokens
+   ├─ Profiler   ncu verdict per hot kernel: memory / compute / occupancy / latency bound
+   ├─ Proposer   one anchored edit per turn, aimed by that verdict
+   └─ Gate       build → correctness → speed; anything else is reverted
 ```
+
+**Two phases, one frontier.** The sweep runs first — tile shapes, block dims, unroll
+factors, `__launch_bounds__` — finding 75 tunable constants across 43 kernel files at no
+token cost. The proposer then works on the frontier the sweep left behind, so the two
+cannot double-count a gain.
+
+Capacity constants (`kMaxDevices`, `MAX_SEQ_LEN`, `kSlotCount`) are deliberately excluded
+from the sweep: shrinking a buffer bound can pass a short correctness check and still
+overflow under a longer context — a latent bug wearing a speedup's clothes.
 
 ## What the gateway forces
 
-Gittensor Compute serves one model (`qwen3.6-35b-a3b`) with constraints that shaped
-everything above:
+The agent runs on [Gittensor Compute](https://docs.gittensor.io/compute-serving), which
+serves `qwen3.6-35b-a3b` from sparkinfer on miner-owned RTX 5090s. Its constraints shaped
+the design:
 
 | constraint | consequence |
 |---|---|
 | `max_tokens` capped at 1024 | small anchored search/replace edits, never file rewrites |
-| sampling ignored, greedy only | zero diversity from temperature — it comes from *structure* (target × family) instead |
+| sampling ignored, greedy only | no diversity from temperature — it comes from *structure* (target × technique) |
 | `429` with no queue | backoff lives in the harness, so an agent is not scored on someone else's retry storm |
-| 3B active parameters | autotune deterministically first; spend tokens only where a sweep cannot reach |
+| 3B active parameters | sweep deterministically first; spend tokens only where a sweep cannot reach |
+
+There is a flywheel here worth naming: the agent optimising sparkinfer **runs on
+sparkinfer**, served by SN74 compute miners. A faster runtime improves serving economics,
+which attracts compute miners, which adds the capacity this competition consumes.
+
+## Measured on an RTX 5090
+
+Against `feat/spark-x25-4b`, the Spark-X2.5-4B target:
+
+| | |
+|---|---|
+| spark2_5 decode | 335 tok/s, 11.1 GB (Q4_K_M) |
+| candidate iteration | **80 s** — 79 s incremental build + 1 s bench |
+| correctness gate | 2–3 s differential; 298 s independent reference |
+| candidates per 3-hour round | ~130 |
+| inference cost per round | ~$0.005 |
 
 ## Layout
 
 | module | what |
 |---|---|
-| `config.py` | env-driven settings; the editable-path allowlist |
-| `backend.py` | gateway client — token clamping, 429 backoff, usage and `served_uid` accounting |
-| `edits.py` | the search/replace format, path guard, all-or-nothing batch apply |
-| `source.py` | brace-matched function extraction — verbatim, so anchors still match |
-| `autotune.py` | deterministic constant sweep — runs *before* any token is spent |
+| `autotune.py` | deterministic constant sweep — runs before any token is spent |
 | `profile.py` | ncu profiling, bottleneck verdicts, profile-directed targeting |
-| `memory.py` | cross-round memory — family priors, rejected edits, swept knobs |
-| `smoke.py` | preflight — exercises every layer against the real box and gateway |
-| `families.py` | named optimization families + per-target UCB1 bandit |
-| `worktree.py` | one git worktree per candidate; the frontier only moves on a measured win |
-| `harness.py` | the gate: build → accuracy → speed, with the significance and regression rules |
-| `runner.py` | subprocess harness bound to sparkinfer's bench scripts (env-configurable) |
-| `loop.py` | the optimizer |
-| `cli.py` | arena entrypoint |
+| `families.py` | named optimization techniques + per-target UCB1 bandit |
+| `memory.py` | cross-round memory — technique priors, rejected edits, swept knobs |
+| `worktree.py` | the frontier; only moves on a measured win |
+| `harness.py` / `runner.py` | the gate: build → correctness → speed |
+| `smoke.py` | preflight against the real box, gateway and checkout |
+| `adapters/` | correctness gates per target |
 
-## Arena contract
-
-```
-in    $CUDA_AGENT_REPO       checkout at the round's pinned base commit
-      $GITTENSOR_API_KEY     scoped, metered, per-round
-out   $CUDA_AGENT_OUT/patch.diff      the submission
-      $CUDA_AGENT_OUT/report.json     evidence — never the score
-      $CUDA_AGENT_OUT/ledger.jsonl    every attempt, written as it happens
-```
-
-The patch is written on every exit path including SIGTERM at the deadline, so a
-killed agent still submits its best *verified* state. Scoring is the arena
-re-running that patch cold through sparkinfer's own eval path — never these numbers.
-
-## Run
+## Run it
 
 ```bash
 pip install -e '.[dev]' && pytest
 
 GITTENSOR_API_KEY=... CUDA_AGENT_REPO=/path/to/sparkinfer \
-  cuda-agent --smoke            # preflight everything, then exit
+  cuda-agent --smoke --base-ref feat/spark-x25-4b
 ```
 
-**Run `--smoke` before any real round.** Unit tests prove the code agrees with its
-fixtures; smoke proves it agrees with *this* box, gateway and checkout — which is a
-different claim, and the one that matters. Checks run cheapest-first and skip rather than
-cascade, and anything that fails prints the raw output that confused it:
+**Run `--smoke` before anything else.** Unit tests prove the code agrees with its fixtures;
+smoke proves it agrees with *this* box, gateway and checkout — a different claim, and the
+one that matters. It has already caught a bench parser that matched nothing, an ncu
+diagnostic that named the wrong error, and a missing base ref that would have optimised a
+tree containing no spark2_5 at all.
 
-```
-[ok  ] config             repo=/…/sparkinfer model=qwen3.6-35b-a3b max_tokens=1024
-[ok  ] targets            139 targets across 43 files; first extract 2511B
-[ok  ] knobs              75 knobs {'tile': 30, 'constexpr': 30, 'define': 7, …}
-[FAIL] gateway-auth       gateway 401: {"error":{"message":"invalid api key"}}
-[skip] gateway-context    needs gateway-auth
-```
+Wiring for the Spark target is in [`adapters/README.md`](adapters/README.md).
 
-`--smoke-no-gpu` runs config and gateway only. Results also land in `out/smoke.json`;
-exit is non-zero if anything failed.
+## Contributing
 
-The two checks worth reading closely:
-
-- **`gateway-context`** sends a *real* proposal prompt built from a real kernel, and
-  reports the prompt token count and whether an edit parsed back. It answers the one
-  question fixtures cannot — does the served context window fit a kernel function plus
-  its history block, and does this model emit applicable edits at all.
-- **`bench`** is where a parser/format mismatch surfaces instantly. It has already caught
-  one: the real line is `decode tg : 95.70 tok/s (… ctx=4096 …)`, throughput *before*
-  context, and a regex written the other way round matched nothing at all.
-
-Bench wiring is env-configurable, because sparkinfer's scored target moves:
-
-Bench wiring is env-configurable, because sparkinfer's scored target moves:
-
-```bash
-CUDA_AGENT_BUILD_CMD="cmake -B build -DCMAKE_CUDA_ARCHITECTURES=120 && cmake --build build -j"
-CUDA_AGENT_BENCH_CMD="bench/scripts/bench.sh --tokens 128"
-CUDA_AGENT_QUICK_BENCH_CMD="bench/scripts/bench.sh --ctx 4096 --tokens 64"
-CUDA_AGENT_ACCURACY_CMD="bench/scripts/accuracy.sh"
-```
-
-## Two phases
-
-**1. Deterministic sweep.** Tile sizes, block dims, unroll factors, `__launch_bounds__` —
-found by counting, not by reasoning. Costs zero tokens and does not depend on the model
-being clever. On the current sparkinfer tree it finds **75 tunable constants across 43
-kernel files**, geometry first:
-
-```bash
-cuda-agent --list-knobs
-kernels/csrc/cuda/fused/batched_prefill.cu::PF_BM@128   define  -> [64, 256, 32, 512]
-```
-
-Capacity constants (`kMaxDevices`, `MAX_SEQ_LEN`, `kSlotCount`) are deliberately
-excluded. Shrinking a buffer bound can pass a short accuracy check and still overflow
-under a longer context — a latent bug wearing a speedup's clothes.
-
-Search is coordinate descent, not a grid: knobs interact, but a grid over ten knobs is
-thousands of builds and the round is three hours long.
-
-**2. Proposer, aimed by the profiler.** What a sweep cannot reach — restructuring, fusion,
-memory hints. Runs on the frontier the sweep left behind, so the two phases cannot
-double-count a gain.
-
-`ncu` decides *where* to look and *what to try*. Each hot kernel gets a bottleneck
-verdict from its throughput, occupancy and dominant warp stall:
-
-| verdict | first families tried |
-|---|---|
-| memory-bound | `vector_width`, `memory_hint`, `smem_layout`, `fusion` |
-| compute-bound | `tile_shape`, `unroll`, `redundant_work` |
-| occupancy-limited | `launch_config`, `unroll`, `tile_shape` |
-| latency-bound | `unroll`, `split_k`, `launch_config` |
-
-The verdict seeds only the *exploration order*; once an arm is pulled its value comes
-from measurement, so a wrong prior costs a few iterations rather than skewing the round.
-Target rotation is weighted by share of GPU time, and the profile is refreshed after the
-frontier moves — fixing the top kernel moves the bottleneck, and continuing to hammer it
-is how an agent spends an hour on a kernel that stopped being the problem.
-
-Kernels that don't map to editable source (cuBLAS, CUTLASS) are dropped rather than
-guessed at. If `ncu` is missing or counters are admin-restricted
-(`NVreg_RestrictProfilingToAdminUsers`), the round proceeds round-robin and the reason
-lands in `report.json`.
-
-## Cross-round memory
-
-A daily competition rewards an agent that remembers yesterday. Three things carry, and
-they pay in different currencies:
-
-| carried | why |
-|---|---|
-| which families paid on which kernel | with ~20 proposer iterations a round, starting in the right part of the space is most of the game |
-| edits already tried and rejected | the expensive one — re-proposing last week's failure costs a full build-and-benchmark cycle |
-| knob values already swept | same argument, applied to the sweep budget |
-
-Negative memory is the dangerous half: code moves, and an edit that failed against last
-week's kernel may be right against today's. So a rejection is trusted only while **its
-anchor text still exists unchanged in the file**, and it expires by age regardless
-(7 rounds). Suppressing a good idea forever is a worse failure than re-running one build.
-
-Precedence when both speak: **this round's profile leads, memory follows.** A kernel that
-was compute-bound yesterday may not be today, so fresh evidence orders the families first
-and remembered winners are appended rather than dropped.
-
-The store is written atomically and saved on SIGTERM too — a round killed at the deadline
-still learned something, and the deadline should not be the one place the agent forgets.
-
-`--no-memory` starts cold. Whether an agent gets a persistent volume between rounds at all
-is the arena's call, not the agent's.
-
-## Not built yet
-
-- Proposal pipelining against measurement (the GPU is serialized; gateway latency is not).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to enter a round, what wins, and what costs
+you one.
