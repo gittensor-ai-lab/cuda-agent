@@ -309,7 +309,6 @@ def test_profile_directs_targeting_and_reaches_the_prompt(repo, tmp_path):
 
 def test_profiler_seeds_the_bandit_toward_memory_families(repo, tmp_path):
     opt, _, _, _ = make_optimizer(repo, tmp_path, ["prose"], budget=2)
-    from cuda_agent.families import FAMILIES
     opt.bandit = __import__("cuda_agent.families", fromlist=["FamilyBandit"]).FamilyBandit()
     opt.profiler = FakeProfiler()
     opt.run()

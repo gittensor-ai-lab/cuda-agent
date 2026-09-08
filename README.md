@@ -64,6 +64,28 @@ Capacity constants (`kMaxDevices`, `MAX_SEQ_LEN`, `kSlotCount`) are deliberately
 from the sweep: shrinking a buffer bound can pass a short correctness check and still
 overflow under a longer context — a latent bug wearing a speedup's clothes.
 
+## Target the kernels the model actually runs
+
+sparkinfer's kernel tree serves several models. Spark-X2.5 is dense, GQA-4, head_dim 256 —
+so `flash_decode_gqa8.cu` (2 KV-heads, head_dim 128), `flash_decode_global_hd512.cu`
+(head_dim 512) and everything under `moe/` and `vision/` never execute for it.
+
+Measured: without a target list, **38% of a round's budget went to kernels the model never
+dispatches**, and not one candidate reached GEMV — where a dense 4B model at batch 1
+actually spends its decode. Those edits compiled, applied, and measured "not-faster"
+because they did nothing at all.
+
+`ncu` would decide this at runtime, but GPU counters are admin-gated on rented GPUs
+(`ERR_NVGPUCTRPERM` on two independent vast.ai hosts), so the selection is made statically
+from the model's own GGUF geometry:
+
+```bash
+python adapters/make_targets_spark25.py /path/to/sparkinfer 3 targets-spark25.json
+cuda-agent --targets targets-spark25.json --base-ref feat/spark-x25-4b
+```
+
+143 targets become 98, GEMM/GEMV first. **Use it** — it is setup, not an optimisation.
+
 ## What the gateway forces
 
 The agent runs on [Gittensor Compute](https://docs.gittensor.io/compute-serving), which

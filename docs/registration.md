@@ -141,9 +141,9 @@ gateway support.
 
 - Reference agent: proven end-to-end on an RTX 5090 against `feat/spark-x25-4b` — builds at
   `sm_120`, runs Spark-X2.5-4B at 335 tok/s, and puts a candidate through the full
-  build → correctness → speed gate in 92 s. 103 tests.
+  build → correctness → speed gate in 92 s. 104 tests.
 - Arena: three consecutive practice rounds have run the complete pipeline — admit, run,
-  guard, measure, declare, settle. 131 tests.
+  guard, measure, declare, settle. 132 tests.
 - Every round so far has surfaced a real bug, including two that billed miners for the
   operator's mistakes. Both are fixed, and `cuda-arena pardon` exists because a system that
   charges people needs an undo.

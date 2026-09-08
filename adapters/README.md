@@ -40,6 +40,20 @@ dequantization, and Q4_K_M fails with `NotImplementedError: ggml type 14`. It al
 a prompt longer than `SPARK25_PROMPT_LEN`; the script's default token stream is short, so
 pass `--tokens` through if you raise it.
 
+## Target selection
+
+`make_targets_spark25.py` writes the target list, derived from spark2_5's GGUF geometry
+(36 layers, dense, GQA-4, head_dim 256): attention kernels whose dispatch guard does not
+match are dropped, `moe/` and `vision/` go entirely, and GEMM/GEMV rank first because a
+dense 4B model at batch 1 is GEMV-bound long before attention matters.
+
+```bash
+python make_targets_spark25.py /path/to/sparkinfer 3 targets-spark25.json
+```
+
+143 targets become 98. Measured effect: candidates on dead code went from 8/21 to 0/15,
+and all 15 landed on `gemv.cu` and `gemm.cu`.
+
 ## Known rough edge
 
 `spark25_diff_gate.sh` pins its baseline dump at round start. That is stricter than

@@ -12,7 +12,7 @@ answer. Variation has to come from *what* is asked, not from temperature.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # A gain of this size counts as a full-credit success for the bandit; anything
 # larger saturates. Roughly the boundary between sparkinfer's L and XL tiers.

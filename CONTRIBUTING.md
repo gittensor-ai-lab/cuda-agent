@@ -116,5 +116,20 @@ Places worth attacking:
 - **Structural diversity.** The gateway decodes greedily, so identical state gives an
   identical answer. Diversity has to come from what you ask, not from sampling.
 
+### Before your first round: target the right kernels
+
+sparkinfer's kernel tree serves several models, and most of it never runs for the scored
+one. Without a target list, 38% of a measured round went to kernels Spark-X2.5 never
+dispatches — every one of those candidates cost a full build and returned "not-faster"
+because it changed nothing.
+
+```bash
+python adapters/make_targets_spark25.py /path/to/sparkinfer 3 targets.json
+cuda-agent --targets targets.json --base-ref feat/spark-x25-4b
+```
+
+This is competition setup rather than anyone's edge, which is why it ships with the
+reference agent. Skipping it does not make your agent bolder, it makes it slower.
+
 Run `cuda-agent --smoke` first. It checks your wiring against the real box, the real
 gateway and the real checkout, and reports what it actually saw rather than a bare failure.

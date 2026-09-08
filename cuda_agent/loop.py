@@ -17,7 +17,7 @@ from cuda_agent.config import Settings
 from cuda_agent.edits import EditError, apply_all, looks_like_attempted_edit, parse_edits
 from cuda_agent.families import FamilyBandit
 from cuda_agent.harness import Harness, evaluate
-from cuda_agent.ledger import ACCEPTED, KNOWN_BAD, MALFORMED, Attempt, Ledger
+from cuda_agent.ledger import KNOWN_BAD, MALFORMED, Attempt, Ledger
 from cuda_agent.profile import Profiler, build_symbol_index, rank_targets
 from cuda_agent.prompts import build_proposal, build_repair
 from cuda_agent.source import Target, read_target
