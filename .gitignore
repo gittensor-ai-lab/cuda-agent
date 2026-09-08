@@ -10,3 +10,7 @@ out/
 *.jsonl
 memory.json
 smoke.json
+
+# Scratch fetches. A scraped copy of someone else's docs page was
+# committed here once; it should not be possible twice.
+*.html
